@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk.WindowsDesktop">
+    <PropertyGroup>
+        <OutputType>WinExe</OutputType>
+        <TargetFramework>net8.0-windows10.0.22621.0</TargetFramework>
+        <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
+        <RootNamespace>PartTracker</RootNamespace>
+        <AssemblyName>PartTracker</AssemblyName>
+        <UseWinUI>true</UseWinUI>
+        <EnableMsixTooling>true</EnableMsixTooling>
+        <Nullable>enable</Nullable>
+        <LangVersion>latest</LangVersion>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <!-- WinUI -->
+        <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.6.240829002" />
+        <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.22621.756" />
+
+        <!-- Database & ORM -->
+        <PackageReference Include="Dapper" Version="2.1.15" />
+        <PackageReference Include="System.Data.SQLite" Version="1.0.118.0" />
+        <PackageReference Include="System.Data.SQLite.Core" Version="1.0.118.0" />
+
+        <!-- Excel -->
+        <PackageReference Include="ClosedXML" Version="0.104.1" />
+        <PackageReference Include="DocumentFormat.OpenXml" Version="2.20.0" />
+
+        <!-- Security & Hashing -->
+        <PackageReference Include="System.Security.Cryptography" Version="4.3.1" />
+
+        <!-- Logging -->
+        <PackageReference Include="Serilog" Version="4.1.1" />
+        <PackageReference Include="Serilog.Sinks.File" Version="5.0.0" />
+
+        <!-- JSON -->
+        <PackageReference Include="System.Text.Json" Version="8.0.4" />
+    </ItemGroup>
+</Project>
