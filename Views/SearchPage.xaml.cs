@@ -1,1 +1,139 @@
-using Microsoft.UI.Xaml;\nusing Microsoft.UI.Xaml.Controls;\nusing PartTracker.Models;\nusing PartTracker.Services;\nusing Serilog;\n\nnamespace PartTracker.Views\n{\n    public sealed partial class SearchPage : Window\n    {\n        private readonly DatabaseService _db;\n        private readonly PrintService _printService;\n        private readonly Models.User _currentUser;\n        private readonly ILogger _logger;\n        private Part? _lastFoundPart;\n\n        public SearchPage(DatabaseService db, Models.User user)\n        {\n            InitializeComponent();\n            _db = db;\n            _currentUser = user;\n            _printService = new PrintService(_db);\n            _logger = new LoggerConfiguration()\n                .WriteTo.File(\"logs/ui.log\", rollingInterval: RollingInterval.Day)\n                .CreateLogger();\n            UserInfo.Text = $\"Mechanik: {user.Username}\";\n        }\n\n        private void OnCodeInputKeyDown(object sender, Microsoft.UI.Xaml.Input.KeyRoutedEventArgs e)\n        {\n            if (e.Key == Windows.System.VirtualKey.Enter)\n            {\n                OnSearchClick(null, null);\n            }\n        }\n\n        private async void OnSearchClick(object sender, RoutedEventArgs? e)\n        {\n            try\n            {\n                ResultPanel.Children.Clear();\n                PrintButton.IsEnabled = false;\n                _lastFoundPart = null;\n\n                string code = CodeInput.Text?.Trim() ?? \"\";\n\n                if (string.IsNullOrEmpty(code))\n                {\n                    ShowError(\"Zadejte prosím kód dílu\");\n                    return;\n                }\n\n                if (code.Length != 5 || !code.All(char.IsDigit))\n                {\n                    ShowError(\"Kód musí být 5 číslic\");\n                    return;\n                }\n\n                var part = await _db.GetPartByCodeAsync(code);\n\n                if (part == null)\n                {\n                    ShowError($\"Díl s kódem {code} nenalezen\");\n                    var similar = await _db.GetSimilarPartsAsync(code);\n                    if (similar.Count > 0)\n                    {\n                        ShowSimilar(similar);\n                    }\n                    return;\n                }\n\n                _lastFoundPart = part;\n                DisplayPart(part);\n                PrintButton.IsEnabled = true;\n            }\n            catch (Exception ex)\n            {\n                ShowError($\"Chyba: {ex.Message}\");\n                _logger.Error($\"Search error: {ex.Message}\");\n            }\n        }\n\n        private async void OnPrintClick(object sender, RoutedEventArgs e)\n        {\n            try\n            {\n                if (_lastFoundPart == null)\n                {\n                    ShowError(\"Nejdříve vyberte díl\");\n                    return;\n                }\n\n                var printers = _printService.GetAvailablePrinters();\n                if (printers.Count == 0)\n                {\n                    ShowError(\"Žádná tiskárna není dostupná\");\n                    return;\n                }\n\n                string selectedPrinter = printers.FirstOrDefault(p => p.Contains(\"Kyocera\")) ?? printers[0];\n                _printService.SetPrinter(selectedPrinter);\n\n                PrintButton.IsEnabled = false;\n                bool success = await _printService.PrintPartLabelAsync(_lastFoundPart, _currentUser.Id);\n\n                if (success)\n                {\n                    ShowSuccess($\"✅ Díl {_lastFoundPart.Code} úspěšně vytisknuta\");\n                    CodeInput.Text = \"\";\n                    _lastFoundPart = null;\n                    ResultPanel.Children.Clear();\n                }\n                else\n                {\n                    ShowError(\"❌ Tisk se nezdařil. Zkontrolujte tiskárnu.\");\n                }\n            }\n            catch (Exception ex)\n            {\n                ShowError($\"Chyba při tisku: {ex.Message}\");\n                _logger.Error($\"Print error: {ex.Message}\");\n            }\n            finally\n            {\n                PrintButton.IsEnabled = (_lastFoundPart != null);\n            }\n        }\n\n        private void OnLogoutClick(object sender, RoutedEventArgs e)\n        {\n            this.Close();\n        }\n\n        private void DisplayPart(Part part)\n        {\n            var card = new StackPanel { Spacing = 10, Padding = new Thickness(15) };\n            card.Background = new Microsoft.UI.Xaml.Media.SolidColorBrush(\n                Microsoft.UI.Colors.FromArgb(255, 50, 50, 50)\n            );\n\n            var code = new TextBlock\n            {\n                Text = $\"Kód: {part.Code}\",\n                FontSize = 18,\n                FontWeight = Windows.UI.Text.FontWeights.Bold,\n                Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(\n                    Microsoft.UI.Colors.FromArgb(255, 76, 175, 80)\n                )\n            };\n\n            var name = new TextBlock\n            {\n                Text = $\"Název: {part.Name}\",\n                FontSize = 14,\n                Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(\n                    Microsoft.UI.Colors.FromArgb(255, 200, 200, 200)\n                )\n            };\n\n            var desc = new TextBlock\n            {\n                Text = $\"Popis: {part.Description}\",\n                FontSize = 12,\n                Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(\n                    Microsoft.UI.Colors.FromArgb(255, 150, 150, 150)\n                ),\n                TextWrapping = TextWrapping.Wrap\n            };\n\n            card.Children.Add(code);\n            card.Children.Add(name);\n            card.Children.Add(desc);\n\n            ResultPanel.Children.Add(card);\n        }\n\n        private void ShowSimilar(List<Part> parts)\n        {\n            var header = new TextBlock\n            {\n                Text = \"Podobné kódy:\",\n                FontSize = 14,\n                FontWeight = Windows.UI.Text.FontWeights.Bold,\n                Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(\n                    Microsoft.UI.Colors.FromArgb(255, 255, 193, 7)\n                )\n            };\n            ResultPanel.Children.Add(header);\n\n            foreach (var part in parts)\n            {\n                var button = new Button\n                {\n                    Content = $\"{part.Code} - {part.Name}\",\n                    Height = 40,\n                    Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(\n                        Microsoft.UI.Colors.FromArgb(255, 255, 255, 255)\n                    )\n                };\n                button.Click += (s, e) =>\n                {\n                    CodeInput.Text = part.Code;\n                    OnSearchClick(null, null);\n                };\n                ResultPanel.Children.Add(button);\n            }\n        }\n\n        private void ShowError(string message)\n        {\n            var textBlock = new TextBlock\n            {\n                Text = message,\n                FontSize = 14,\n                Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(\n                    Microsoft.UI.Colors.FromArgb(255, 255, 107, 107)\n                )\n            };\n            ResultPanel.Children.Clear();\n            ResultPanel.Children.Add(textBlock);\n        }\n\n        private void ShowSuccess(string message)\n        {\n            var textBlock = new TextBlock\n            {\n                Text = message,\n                FontSize = 14,\n                Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(\n                    Microsoft.UI.Colors.FromArgb(255, 76, 175, 80)\n                )\n            };\n            ResultPanel.Children.Clear();\n            ResultPanel.Children.Add(textBlock);\n        }\n    }\n}
+using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Controls;
+using PartTracker.Services;
+using PartTracker.Models;
+
+namespace PartTracker.Views
+{
+    public sealed partial class SearchPage : Page
+    {
+        private string _userId;
+        private Action _onLogout;
+        private PartService _partService;
+        private PrintService _printService;
+        private Part _selectedPart;
+
+        public SearchPage(string userId, Action onLogout)
+        {
+            this.InitializeComponent();
+            _userId = userId;
+            _onLogout = onLogout;
+            _partService = new PartService();
+            _printService = new PrintService();
+            
+            UserInfo.Text = $"Přihlášen: {userId}";
+        }
+
+        private async void OnSearchClick(object sender, RoutedEventArgs e)
+        {
+            await PerformSearch();
+        }
+
+        private async void OnCodeInputKeyDown(object sender, Microsoft.UI.Xaml.Input.KeyRoutedEventArgs e)
+        {
+            if (e.Key == Windows.System.VirtualKey.Enter)
+            {
+                await PerformSearch();
+            }
+        }
+
+        private async Task PerformSearch()
+        {
+            string code = CodeInput.Text.Trim();
+            if (string.IsNullOrEmpty(code))
+            {
+                return;
+            }
+
+            ResultPanel.Children.Clear();
+            PrintButton.IsEnabled = false;
+
+            try
+            {
+                _selectedPart = await _partService.SearchPartAsync(code);
+                if (_selectedPart != null)
+                {
+                    DisplayPartInfo(_selectedPart);
+                    PrintButton.IsEnabled = true;
+                }
+                else
+                {
+                    var errorText = new TextBlock
+                    {
+                        Text = $"Díl s kódem {code} nebyl nalezen.",
+                        Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(Windows.UI.Color.FromArgb(255, 255, 107, 107))
+                    };
+                    ResultPanel.Children.Add(errorText);
+                }
+            }
+            catch (Exception ex)
+            {
+                var errorText = new TextBlock
+                {
+                    Text = $"Chyba: {ex.Message}",
+                    Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(Windows.UI.Color.FromArgb(255, 255, 107, 107))
+                };
+                ResultPanel.Children.Add(errorText);
+            }
+        }
+
+        private void DisplayPartInfo(Part part)
+        {
+            var codeText = new TextBlock
+            {
+                Text = $"Kód: {part.Code}",
+                FontSize = 16,
+                FontWeight = Windows.UI.Text.FontWeights.Bold
+            };
+            ResultPanel.Children.Add(codeText);
+
+            var nameText = new TextBlock
+            {
+                Text = $"Název: {part.Name}",
+                FontSize = 14,
+                Margin = new Thickness(0, 10, 0, 0)
+            };
+            ResultPanel.Children.Add(nameText);
+
+            var descText = new TextBlock
+            {
+                Text = $"Popis: {part.Description}",
+                FontSize = 14,
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 10, 0, 0)
+            };
+            ResultPanel.Children.Add(descText);
+        }
+
+        private async void OnPrintClick(object sender, RoutedEventArgs e)
+        {
+            if (_selectedPart != null)
+            {
+                try
+                {
+                    await _printService.PrintPartLabelAsync(_selectedPart, _userId);
+                    var successText = new TextBlock
+                    {
+                        Text = "Štítek byl úspěšně vytisknut.",
+                        Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(Windows.UI.Color.FromArgb(255, 76, 175, 80))
+                    };
+                    ResultPanel.Children.Add(successText);
+                }
+                catch (Exception ex)
+                {
+                    var errorText = new TextBlock
+                    {
+                        Text = $"Chyba tisku: {ex.Message}",
+                        Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(Windows.UI.Color.FromArgb(255, 255, 107, 107))
+                    };
+                    ResultPanel.Children.Add(errorText);
+                }
+            }
+        }
+
+        private void OnLogoutClick(object sender, RoutedEventArgs e)
+        {
+            _onLogout?.Invoke();
+        }
+    }
+}

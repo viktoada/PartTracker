@@ -1,1 +1,40 @@
-using Microsoft.UI.Xaml;\nusing PartTracker.Services;\n\nnamespace PartTracker\n{\n    public sealed partial class MainWindow : Window\n    {\n        public MainWindow() => InitializeComponent();\n\n        private async void OnWindowLoaded(object sender, RoutedEventArgs e)\n        {\n            try\n            {\n                var db = new DatabaseService();\n                await db.InitializeAsync();\n                \n                var admin = await db.GetUserByUsernameAsync(\"admin\");\n                if (admin == null)\n                {\n                    var auth = new AuthService(db);\n                    await auth.CreateUserAsync(\"admin\", \"admin123\", \"Admin\");\n                }\n                \n                var loginPage = new Views.LoginPage();\n                loginPage.Activate();\n                this.Close();\n            }\n            catch (Exception ex)\n            {\n                var dialog = new ContentDialog\n                {\n                    Title = \"Error\",\n                    Content = $\"Init failed: {ex.Message}\",\n                    CloseButtonText = \"OK\"\n                };\n                await dialog.ShowAsync();\n            }\n        }\n    }\n}
+using Microsoft.UI.Xaml;
+using PartTracker.Services;
+using PartTracker.Views;
+
+namespace PartTracker
+{
+    public sealed partial class MainWindow : Window
+    {
+        private AuthenticationService _authService;
+
+        public MainWindow()
+        {
+            this.InitializeComponent();
+            _authService = new AuthenticationService();
+        }
+
+        private async void OnWindowLoaded(object sender, RoutedEventArgs e)
+        {
+            // Initialize the application
+            await LoadLoginPageAsync();
+        }
+
+        private async Task LoadLoginPageAsync()
+        {
+            var loginPage = new LoginPage(OnLoginSuccess);
+            this.Content = loginPage;
+        }
+
+        private void OnLoginSuccess(string userId)
+        {
+            var searchPage = new SearchPage(userId, OnLogout);
+            this.Content = searchPage;
+        }
+
+        private void OnLogout()
+        {
+            _ = LoadLoginPageAsync();
+        }
+    }
+}

@@ -1,1 +1,98 @@
-using Microsoft.UI.Xaml;\nusing Microsoft.UI.Xaml.Controls;\nusing Windows.Storage.Pickers;\nusing PartTracker.Services;\nusing PartTracker.Models;\nusing Serilog;\n\nnamespace PartTracker.Views\n{\n    public sealed partial class AdminPage : Window\n    {\n        private readonly DatabaseService _db;\n        private readonly ExcelImporter _importer;\n        private readonly ExcelExporter _exporter;\n        private readonly ILogger _logger;\n\n        public AdminPage(DatabaseService db)\n        {\n            InitializeComponent();\n            _db = db;\n            _importer = new ExcelImporter();\n            _exporter = new ExcelExporter();\n            _logger = new LoggerConfiguration()\n                .WriteTo.File(\"logs/ui.log\", rollingInterval: RollingInterval.Day)\n                .CreateLogger();\n\n            LoadPrintLogs();\n        }\n\n        private async void OnSelectExcelClick(object sender, RoutedEventArgs e)\n        {\n            try\n            {\n                var filePicker = new FileOpenPicker();\n                filePicker.FileTypeFilter.Add(\".xlsx\");\n                filePicker.FileTypeFilter.Add(\".xls\");\n                filePicker.SuggestedStartLocation = PickerLocationId.DocumentsLibrary;\n\n                var window = (Application.Current as App)?.Window as MainWindow;\n                if (window != null)\n                {\n                    WinRT.Interop.InitializeWithWindow.Initialize(filePicker, WinRT.Interop.WindowNative.GetWindowHandle(this));\n                }\n\n                var file = await filePicker.PickSingleFileAsync();\n                if (file == null) return;\n\n                ImportStatus.Text = \"Importuji...\";\n                ImportProgress.IsIndeterminate = true;\n\n                var result = await _importer.ImportAsync(file.Path);\n\n                if (result.Parts.Count > 0)\n                {\n                    int inserted = await _db.InsertPartsAsync(result.Parts);\n                    ImportStatus.Text = $\"✅ Importováno {inserted} dílů\";\n                    _logger.Information($\"Admin imported {inserted} parts\");\n                }\n\n                if (result.Errors.Count > 0)\n                {\n                    ImportStatus.Text += $\" ({result.Errors.Count} chyb)\";\n                }\n            }\n            catch (Exception ex)\n            {\n                ImportStatus.Text = $\"❌ Chyba: {ex.Message}\";\n                _logger.Error($\"Import error: {ex.Message}\");\n            }\n            finally\n            {\n                ImportProgress.IsIndeterminate = false;\n            }\n        }\n\n        private async void OnExportClick(object sender, RoutedEventArgs e)\n        {\n            try\n            {\n                ExportStatus.Text = \"Exportuji...\";\n\n                var parts = await _db.GetRemovedPartsAsync();\n\n                if (parts.Count == 0)\n                {\n                    ExportStatus.Text = \"⚠️ Žádné demontované díly k exportu\";\n                    return;\n                }\n\n                var savePicker = new FileSavePicker();\n                savePicker.FileTypeChoices.Add(\"Excel\", new List<string> { \".xlsx\" });\n                savePicker.SuggestedFileName = $\"DemontazMotoru_{DateTime.Now:yyyy-MM-dd_HHmmss}\";\n                savePicker.SuggestedStartLocation = PickerLocationId.DocumentsLibrary;\n\n                var window = (Application.Current as App)?.Window as MainWindow;\n                if (window != null)\n                {\n                    WinRT.Interop.InitializeWithWindow.Initialize(savePicker, WinRT.Interop.WindowNative.GetWindowHandle(this));\n                }\n\n                var file = await savePicker.PickSaveFileAsync();\n                if (file == null) return;\n\n                bool success = await _exporter.ExportRemovedPartsAsync(file.Path, parts);\n\n                if (success)\n                {\n                    ExportStatus.Text = $\"✅ Exportováno {parts.Count} dílů do {file.Name}\";\n                    _logger.Information($\"Admin exported {parts.Count} parts\");\n                }\n                else\n                {\n                    ExportStatus.Text = \"❌ Export se nezdařil\";\n                }\n            }\n            catch (Exception ex)\n            {\n                ExportStatus.Text = $\"❌ Chyba: {ex.Message}\";\n                _logger.Error($\"Export error: {ex.Message}\");\n            }\n        }\n\n        private async void OnRefreshLogsClick(object sender, RoutedEventArgs e)\n        {\n            await LoadPrintLogs();\n        }\n\n        private async Task LoadPrintLogs()\n        {\n            try\n            {\n                var logs = await _db.GetPrintLogsAsync();\n\n                PrintLogsList.Items.Clear();\n                foreach (var log in logs)\n                {\n                    var item = new ListViewItem\n                    {\n                        Content = $\"{DateTime.Parse(log.PrintedAt):yyyy-MM-dd HH:mm:ss} | {log.PartCode} | {log.Status}\"\n                    };\n\n                    if (log.Status == \"Failed\")\n                    {\n                        item.Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(\n                            Microsoft.UI.Colors.FromArgb(255, 255, 107, 107)\n                        );\n                    }\n                    else\n                    {\n                        item.Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(\n                            Microsoft.UI.Colors.FromArgb(255, 76, 175, 80)\n                        );\n                    }\n\n                    PrintLogsList.Items.Add(item);\n                }\n            }\n            catch (Exception ex)\n            {\n                _logger.Error($\"Error loading print logs: {ex.Message}\");\n            }\n        }\n\n        private void OnCreateUserClick(object sender, RoutedEventArgs e)\n        {\n            var dialog = new CreateUserDialog();\n            dialog.ShowAsync();\n        }\n\n        private void OnLogoutClick(object sender, RoutedEventArgs e)\n        {\n            this.Close();\n        }\n    }\n}
+using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Controls;
+using PartTracker.Services;
+using Windows.Storage.Pickers;
+
+namespace PartTracker.Views
+{
+    public sealed partial class AdminPage : Page
+    {
+        private Action _onLogout;
+        private ImportService _importService;
+        private ExportService _exportService;
+
+        public AdminPage(Action onLogout)
+        {
+            this.InitializeComponent();
+            _onLogout = onLogout;
+            _importService = new ImportService();
+            _exportService = new ExportService();
+        }
+
+        private async void OnSelectExcelClick(object sender, RoutedEventArgs e)
+        {
+            var picker = new FileOpenPicker();
+            picker.FileTypeFilter.Add(".xlsx");
+            picker.FileTypeFilter.Add(".xls");
+            
+            var file = await picker.PickSingleFileAsync();
+            if (file != null)
+            {
+                ImportStatus.Text = $"Importuji: {file.Name}...";
+                ImportProgress.IsActive = true;
+
+                try
+                {
+                    int imported = await _importService.ImportPartsFromExcelAsync(file);
+                    ImportStatus.Text = $"✓ Úspěšně importováno {imported} dílů.";
+                }
+                catch (Exception ex)
+                {
+                    ImportStatus.Text = $"✗ Chyba: {ex.Message}";
+                }
+                finally
+                {
+                    ImportProgress.IsActive = false;
+                }
+            }
+        }
+
+        private async void OnExportClick(object sender, RoutedEventArgs e)
+        {
+            var picker = new FileSavePicker();
+            picker.FileTypeChoices.Add("Excel soubor", new List<string> { ".xlsx" });
+            picker.SuggestedFileName = $"export_demontaza_{DateTime.Now:yyyyMMdd_HHmmss}";
+
+            var file = await picker.PickSaveFileAsync();
+            if (file != null)
+            {
+                ExportStatus.Text = "Exportuji...";
+
+                try
+                {
+                    await _exportService.ExportDemontageToExcelAsync(file);
+                    ExportStatus.Text = "✓ Export úspěšně uložen.";
+                }
+                catch (Exception ex)
+                {
+                    ExportStatus.Text = $"✗ Chyba: {ex.Message}";
+                }
+            }
+        }
+
+        private async void OnRefreshLogsClick(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                var logs = await _exportService.GetPrintLogsAsync();
+                PrintLogsList.ItemsSource = logs;
+            }
+            catch (Exception ex)
+            {
+                var errorText = new TextBlock { Text = $"Chyba: {ex.Message}" };
+                PrintLogsList.Items.Add(errorText);
+            }
+        }
+
+        private async void OnCreateUserClick(object sender, RoutedEventArgs e)
+        {
+            var dialog = new CreateUserDialog();
+            var result = await dialog.ShowAsync();
+        }
+
+        private void OnLogoutClick(object sender, RoutedEventArgs e)
+        {
+            _onLogout?.Invoke();
+        }
+    }
+}
